@@ -7,11 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Personal tooling for managing investments. One tool exists per concern; they share
 this repo but not a framework.
 
-**Planned first tool: allocation drift tracker.** Reads the owner's comdirect depot
-read-only, compares the real asset allocation against a target allocation, and
-sends a Telegram message when a position drifts past its tolerance band. No code
-is written yet, so the sections below are decisions and constraints, not a
-description of what is on disk.
+**First tool: allocation drift bot.** Reads the owner's comdirect depot
+read-only, compares it against a target allocation, and reports drift over
+Telegram on a `/check` command.
+
+Layering runs one way: `drift` and `report` are pure and import nothing from this
+package's edges; `comdirect` and `bot` are the edges; `config` is the boundary
+where untrusted input becomes typed values. Keep it that way. Anything that needs
+a network to test does not belong in `drift` or `report`.
 
 ## This repository is public
 
@@ -58,17 +61,19 @@ upgrade. The access token lives 599 seconds. The spec states the session TAN sta
 valid only until the last access/refresh token expires, and requires that any
 auto-refresh loop stop when the application stops, which kills the session.
 
-So an unattended daily timer cannot authenticate on its own. Only two shapes work:
+So an unattended daily timer cannot authenticate on its own. The bot therefore runs
+on demand: `/check` starts a login, the owner approves the push prompt in the
+comdirect photoTAN app, the bot reads the depot and revokes the token. One short
+burst per check, no resident session.
 
-1. A resident process that logs in once with a manual TAN and refreshes every few
-   minutes to hold the session open. Any restart or network gap ends the session and
-   needs a new TAN.
-2. A Telegram command that starts a login on demand. The owner approves the TAN, the
-   tool pulls positions, reports drift, and lets the session die.
+photoTAN-Push is the only TAN method this supports. The spec is explicit that push
+approval needs no `x-once-authentication` header, so no second factor ever passes
+through the bot or through Telegram. Do not add a code-entry path; it would move a
+TAN into a chat log.
 
-Shape 2 fits a drift check, which is a weekly-or-slower question. Prefer it, and have
-the tool ask for a TAN over Telegram rather than failing silently when a session is
-gone.
+The activation call answers 422 while the prompt is unanswered, which is
+indistinguishable from a rejection. Treat any other status as fatal rather than
+retrying, because three bad TAN entries lock online banking.
 
 Read-only means read-only. The API exposes order placement under `/brokerage/v3/orders`.
 Nothing in this repo calls it.
@@ -78,19 +83,13 @@ Nothing in this repo calls it.
 Hetzner VPS, Ubuntu 24.04, x86_64, 7.6 GB RAM. Reached over the `hetzner` ssh alias.
 No Docker installed, and none is wanted for a job this small.
 
-Copy the pattern already running there at `/opt/daily-digest`, which does the same
-job shape (scheduled Python, Telegram output):
+`deploy/investment-tools.service` follows the pattern already running there at
+`/opt/daily-digest`: code in `/opt/<tool>` owned by a dedicated unprivileged user,
+a venv, secrets in a root-owned `/etc/<tool>/env` pulled in with `EnvironmentFile`,
+and the systemd hardening flags. It differs in one way: the bot listens for a
+command, so it is a `Restart=always` service rather than a oneshot plus a timer.
 
-- code in `/opt/<tool>`, owned by a dedicated unprivileged user, running from a venv
-- a `oneshot` systemd service plus a timer with `OnCalendar` in `Europe/Berlin` and
-  `Persistent=true`
-- secrets in `/etc/<tool>/env`, root-owned and mode 600, pulled in with
-  `EnvironmentFile`, never in the unit file and never in the repo
-- hardening flags on the unit: `NoNewPrivileges`, `ProtectSystem=strict`,
-  `ProtectHome`, `PrivateTmp`, `PrivateDevices`
-- writable state via `StateDirectory`, which lands in `/var/lib/<tool>`
-
-Read `systemctl cat daily-digest@.service` on the VPS before writing a new unit.
+Read `systemctl cat daily-digest@.service` on the VPS before changing the unit.
 
 ## Conventions
 
@@ -101,5 +100,10 @@ allocation as plain values and needs no network to test.
 
 ## Commands
 
-No build or test tooling exists yet. When it lands, add `.claude/check.sh` running
-lint, typecheck, and tests in one command; the commit hook and CI both call it.
+`./.claude/check.sh` runs ruff, ruff format, mypy strict and pytest. CI runs the
+same script, and so does the commit gate, so a green run locally means a green run
+everywhere. Run a single test file with `pytest tests/test_drift.py`.
+
+Dependencies are pinned in `requirements.txt` and `requirements-dev.txt`, both
+generated with `uv pip compile` from `pyproject.toml`. Regenerate them in the same
+change that edits a dependency.

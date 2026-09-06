@@ -1,0 +1,39 @@
+# /etc/systemd/system/investment-tools.service
+#
+# A long-running bot rather than a timer: comdirect cannot be logged into
+# unattended, so the check runs when /check arrives in Telegram.
+#
+#   useradd --system --home-dir /opt/investment-tools --shell /usr/sbin/nologin investment
+#   install -d -o investment -g investment /opt/investment-tools
+#   install -d -m 750 -o root -g investment /etc/investment-tools
+#   install -m 640 -o root -g investment env allocation.toml /etc/investment-tools/
+#   systemctl enable --now investment-tools
+
+[Unit]
+Description=Investment allocation drift bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=investment
+Group=investment
+WorkingDirectory=/opt/investment-tools
+EnvironmentFile=/etc/investment-tools/env
+ExecStart=/opt/investment-tools/.venv/bin/python -m investment_tools
+Restart=always
+RestartSec=30
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryDenyWriteExecute=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
