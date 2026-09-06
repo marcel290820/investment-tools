@@ -7,6 +7,7 @@ which positions have wandered far enough to be worth acting on.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 # Swedroe's 5/25 rule. A position is out of band once it moves either 5
@@ -128,3 +129,11 @@ def calculate(positions: list[Position], targets: list[Target]) -> DriftReport:
         )
 
     return DriftReport(total_eur=total_eur, rows=tuple(rows))
+
+
+@dataclass(frozen=True)
+class BreachRun:
+    """How long a position has been continuously out of band."""
+
+    since: datetime
+    checks: int
