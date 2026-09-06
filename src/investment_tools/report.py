@@ -1,0 +1,84 @@
+"""Turn a drift report into the message the owner reads. Pure formatting."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
+
+from .drift import Drift, DriftReport, top_up_eur
+
+# Below this, a suggested contribution is noise rather than an instruction.
+MIN_SUGGESTION_EUR = Decimal("100")
+
+
+def _eur(amount: Decimal) -> str:
+    rounded = amount.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return f"{rounded:,.0f}".replace(",", ".")
+
+
+def _pct(value: Decimal) -> str:
+    return f"{value.quantize(Decimal('0.1'), rounding=ROUND_HALF_UP):.1f}".replace(".", ",")
+
+
+def _signed_pct(value: Decimal) -> str:
+    quantized = value.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    sign = "+" if quantized >= 0 else "-"
+    return f"{sign}{abs(quantized):.1f}".replace(".", ",")
+
+
+def _row(drift: Drift) -> str:
+    marker = "!" if drift.breached else " "
+    return (
+        f"{marker} {drift.name[:22]:<22} "
+        f"{_pct(drift.actual_pct):>6} "
+        f"{_pct(drift.target_pct):>6} "
+        f"{_signed_pct(drift.deviation_pct):>6} "
+        f"{_pct(drift.band_pct):>5}"
+    )
+
+
+def format_report(report: DriftReport, *, now: datetime) -> str:
+    """Render the report as Telegram HTML."""
+    breached = report.breached
+    if len(breached) == 1:
+        headline = "1 position outside its band"
+    elif breached:
+        headline = f"{len(breached)} positions outside their bands"
+    else:
+        headline = "All positions inside their bands"
+
+    lines = [
+        f"<b>{headline}</b>",
+        f"Depot {_eur(report.total_eur)} EUR, {now:%d.%m.%Y %H:%M}",
+        "",
+        "<pre>",
+        f"  {'Position':<22} {'now':>6} {'target':>6} {'dev':>6} {'band':>5}",
+    ]
+    lines.extend(_row(drift) for drift in report.rows)
+    lines.append("</pre>")
+
+    if breached:
+        # Every underweight position is a place to put new money, whether or not
+        # it is the one that breached. When the breach is on the overweight side
+        # these are the only moves that fix it without realising a gain.
+        suggestions = []
+        for drift in report.rows:
+            amount = top_up_eur(drift, report.total_eur)
+            if amount >= MIN_SUGGESTION_EUR:
+                suggestions.append(f"  {_eur(amount)} EUR into {drift.name}")
+        if suggestions:
+            lines.append("")
+            lines.append("Buy rather than rebalance. Selling realises a taxable gain.")
+            lines.append("To put each position back on target with new money alone:")
+            lines.extend(suggestions)
+
+        overweight = [d for d in report.rows if d.deviation_pct > 0]
+        if overweight:
+            lines.append("")
+            lines.append(
+                "Overweight: "
+                + ", ".join(d.name for d in overweight)
+                + ". Pause contributions here and let the others catch up."
+            )
+
+    return "\n".join(lines)
