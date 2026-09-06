@@ -38,3 +38,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Real target allocation stays on the server
+allocation.toml
