@@ -19,6 +19,9 @@ Type=simple
 User=investment
 Group=investment
 WorkingDirectory=/opt/investment-tools
+# Creates /var/lib/investment-tools, the one writable path under
+# ProtectSystem=strict. The check history lives there.
+StateDirectory=investment-tools
 EnvironmentFile=/etc/investment-tools/env
 ExecStart=/opt/investment-tools/.venv/bin/python -m investment_tools
 Restart=always

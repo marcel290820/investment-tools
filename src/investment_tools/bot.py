@@ -18,6 +18,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from .comdirect import ComdirectError, ComdirectSession
 from .config import Config
 from .drift import Target, calculate
+from .history import History
 from .report import format_report
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,10 @@ logger = logging.getLogger(__name__)
 class DepotChecker:
     """Runs one depot check at a time, on request."""
 
-    def __init__(self, config: Config, targets: list[Target]) -> None:
+    def __init__(self, config: Config, targets: list[Target], history: History) -> None:
         self._config = config
         self._targets = targets
+        self._history = history
         self._lock = asyncio.Lock()
 
     async def check(self, say: _Say) -> None:
@@ -48,8 +50,12 @@ class DepotChecker:
                 await session.await_approval(challenge_id)
                 positions = await session.all_positions()
 
+            now = datetime.now(UTC)
             report = calculate(positions, self._targets)
-            await say(format_report(report, now=datetime.now(UTC)))
+            # Record before reading the runs back, so a breach that starts
+            # today is reported as starting today rather than as unknown.
+            self._history.record(report, now=now)
+            await say(format_report(report, now=now, breach_runs=self._history.breach_runs()))
 
 
 class _Say:
@@ -66,7 +72,7 @@ class _Say:
 
 def run(config: Config, targets: list[Target]) -> None:
     """Build the bot and serve /check until the process is stopped."""
-    checker = DepotChecker(config, targets)
+    checker = DepotChecker(config, targets, History(config.history_db_path))
 
     async def check_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat

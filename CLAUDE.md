@@ -12,9 +12,19 @@ read-only, compares it against a target allocation, and reports drift over
 Telegram on a `/check` command.
 
 Layering runs one way: `drift` and `report` are pure and import nothing from this
-package's edges; `comdirect` and `bot` are the edges; `config` is the boundary
-where untrusted input becomes typed values. Keep it that way. Anything that needs
-a network to test does not belong in `drift` or `report`.
+package's edges; `comdirect`, `history` and `bot` are the edges; `config` is the
+boundary where untrusted input becomes typed values. Keep it that way. Anything
+that needs a network or a file to test does not belong in `drift` or `report`,
+which is why `format_report` takes breach runs as an argument instead of querying
+for them.
+
+`history` is a SQLite file holding one row per position per check. Amounts and
+shares are stored as text: a value written through a float and read back is no
+longer the number that was measured. It is also a record of real holdings, so it
+belongs on the server and never in the repository.
+
+The bot reads. It has no command that allocates, transfers or orders, and adding
+one is a decision the owner makes, not a natural next feature.
 
 ## This repository is public
 

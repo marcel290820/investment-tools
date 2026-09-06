@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from investment_tools.drift import DriftReport, Position, Target, calculate
+from investment_tools.drift import BreachRun, DriftReport, Position, Target, calculate
 from investment_tools.report import format_report
 
 NOW = datetime(2026, 9, 6, 18, 30, tzinfo=UTC)
@@ -54,3 +54,24 @@ def test_an_overweight_breach_still_names_somewhere_to_put_money() -> None:
     assert "1 position outside its band" in text
     assert "into Fund BBB" in text
     assert "into Fund CCC" in text
+
+
+def test_a_breach_reports_how_long_it_has_lasted() -> None:
+    report = report_for(
+        {"AAA": "46000", "BBB": "27000", "CCC": "27000"},
+        {"AAA": "40", "BBB": "30", "CCC": "30"},
+    )
+    runs = {"AAA": BreachRun(since=datetime(2026, 8, 12, tzinfo=UTC), checks=4)}
+    text = format_report(report, now=NOW, breach_runs=runs)
+    assert "Out of band:" in text
+    assert "since 12.08.2026, 25 days and 4 checks" in text
+
+
+def test_a_fresh_breach_reads_as_one_check() -> None:
+    report = report_for(
+        {"AAA": "46000", "BBB": "27000", "CCC": "27000"},
+        {"AAA": "40", "BBB": "30", "CCC": "30"},
+    )
+    runs = {"AAA": BreachRun(since=NOW, checks=1)}
+    text = format_report(report, now=NOW, breach_runs=runs)
+    assert "0 days and 1 check" in text
