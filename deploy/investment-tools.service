@@ -3,8 +3,14 @@
 # A long-running bot rather than a timer: comdirect cannot be logged into
 # unattended, so the check runs when /check arrives in Telegram.
 #
-#   useradd --system --home-dir /opt/investment-tools --shell /usr/sbin/nologin investment
-#   install -d -o investment -g investment /opt/investment-tools
+#   groupadd --system investment
+#   useradd --system -g investment --home-dir /opt/investment-tools \
+#           --shell /usr/sbin/nologin investment
+#   git clone https://github.com/marcel290820/investment-tools.git /opt/investment-tools
+#   chown -R investment:investment /opt/investment-tools
+#   sudo -u investment python3 -m venv /opt/investment-tools/.venv
+#   sudo -u investment /opt/investment-tools/.venv/bin/pip install \
+#           --no-deps -r /opt/investment-tools/requirements.txt
 #   install -d -m 750 -o root -g investment /etc/investment-tools
 #   install -m 640 -o root -g investment env allocation.toml /etc/investment-tools/
 #   systemctl enable --now investment-tools
@@ -19,6 +25,9 @@ Type=simple
 User=investment
 Group=investment
 WorkingDirectory=/opt/investment-tools
+# Run from the source tree. Installing the package on the server would pull
+# an unpinned build backend at deploy time; nothing here needs a build step.
+Environment=PYTHONPATH=/opt/investment-tools/src
 # Creates /var/lib/investment-tools, the one writable path under
 # ProtectSystem=strict. The check history lives there.
 StateDirectory=investment-tools
@@ -34,9 +43,15 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
+# AF_UNIX is listed defensively, not because anything needs it today. This
+# host resolves through the systemd-resolved stub at 127.0.0.53 over UDP and
+# nsswitch is 'files dns', so DNS works without it; switching nsswitch to
+# nss-resolve later would move lookups onto a unix socket and break the bot.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 MemoryDenyWriteExecute=true
 LockPersonality=true
+# The history file records real holdings.
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
