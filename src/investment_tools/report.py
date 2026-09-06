@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from .drift import Drift, DriftReport, top_up_eur
+from .drift import BreachRun, Drift, DriftReport, top_up_eur
 
 # Below this, a suggested contribution is noise rather than an instruction.
 MIN_SUGGESTION_EUR = Decimal("100")
@@ -26,6 +26,14 @@ def _signed_pct(value: Decimal) -> str:
     return f"{sign}{abs(quantized):.1f}".replace(".", ",")
 
 
+def _days(days: int) -> str:
+    return "1 day" if days == 1 else f"{days} days"
+
+
+def _checks(count: int) -> str:
+    return "1 check" if count == 1 else f"{count} checks"
+
+
 def _row(drift: Drift) -> str:
     marker = "!" if drift.breached else " "
     return (
@@ -37,8 +45,14 @@ def _row(drift: Drift) -> str:
     )
 
 
-def format_report(report: DriftReport, *, now: datetime) -> str:
+def format_report(
+    report: DriftReport,
+    *,
+    now: datetime,
+    breach_runs: dict[str, BreachRun] | None = None,
+) -> str:
     """Render the report as Telegram HTML."""
+    runs = breach_runs or {}
     breached = report.breached
     if len(breached) == 1:
         headline = "1 position outside its band"
@@ -58,6 +72,23 @@ def format_report(report: DriftReport, *, now: datetime) -> str:
     lines.append("</pre>")
 
     if breached:
+        # A band this wide is not tripped by a short move, so what separates a
+        # passing wobble from a real shift is how long it has lasted.
+        ages = []
+        for drift in breached:
+            run = runs.get(drift.wkn)
+            if run is None:
+                continue
+            days = (now - run.since).days
+            ages.append(
+                f"  {drift.name}: since {run.since:%d.%m.%Y}"
+                f", {_days(days)} and {_checks(run.checks)}"
+            )
+        if ages:
+            lines.append("")
+            lines.append("Out of band:")
+            lines.extend(ages)
+
         # Every underweight position is a place to put new money, whether or not
         # it is the one that breached. When the breach is on the overweight side
         # these are the only moves that fix it without realising a gain.

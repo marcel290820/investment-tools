@@ -15,6 +15,8 @@ from pathlib import Path
 from .drift import Target
 
 DEFAULT_ALLOCATION_PATH = Path("/etc/investment-tools/allocation.toml")
+# systemd StateDirectory=investment-tools lands here.
+DEFAULT_HISTORY_DB_PATH = Path("/var/lib/investment-tools/history.db")
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,7 @@ class Config:
     telegram_bot_token: str = field(repr=False)
     telegram_chat_id: int
     allocation_path: Path
+    history_db_path: Path
 
 
 def _required(name: str) -> str:
@@ -50,6 +53,7 @@ def load_config() -> Config:
         telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=chat_id_int,
         allocation_path=Path(os.environ.get("ALLOCATION_PATH") or DEFAULT_ALLOCATION_PATH),
+        history_db_path=Path(os.environ.get("HISTORY_DB_PATH") or DEFAULT_HISTORY_DB_PATH),
     )
 
 

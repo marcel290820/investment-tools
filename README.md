@@ -27,7 +27,15 @@ when the allocation has genuinely shifted.
 
 When something is out of band, the suggestion is to buy, not to sell. The report
 says how much new money each underweight position needs to reach its target, and
-which positions to pause contributions to. Selling is left to you.
+which positions to pause contributions to. Selling is left to you. The bot never
+moves money and has no command that could.
+
+### History
+
+Every check is written to a SQLite file, so the report can say how long a
+position has been out of band rather than only that it is out today. Drift that
+has held for months reads differently from drift that appeared this morning, and
+one snapshot cannot tell you which you are looking at.
 
 ### Target allocation
 
