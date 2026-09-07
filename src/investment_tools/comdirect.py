@@ -17,7 +17,6 @@ This module talks only to the brokerage read endpoints. The order endpoints unde
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import secrets
@@ -40,16 +39,39 @@ API_PREFIX = f"{API_ROOT}/api"
 TAN_TYPE = "P_TAN_PUSH"
 REQUEST_TIMEOUT_SECONDS = 30.0
 
-# How long to wait for the owner to reach for their phone, and how often to ask
-# the bank whether they have. The bank locks online banking after three bad TAN
-# entries; push approval submits no TAN, so polling the activation cannot burn
-# an attempt, but the poll stays slow and bounded regardless.
-APPROVAL_TIMEOUT_SECONDS = 180.0
-APPROVAL_POLL_SECONDS = 3.0
+# Enough of the bank's own error text to diagnose a refusal, not enough to fill
+# a terminal when it answers with a page of HTML.
+MAX_ERROR_DETAIL_CHARS = 300
 
 
 class ComdirectError(RuntimeError):
     """The bank refused, or answered with something this client cannot use."""
+
+
+def _detail(response: httpx.Response) -> str:
+    """The bank's own explanation of a refusal.
+
+    Worth surfacing: a bare status code is not enough to tell a rejected request
+    from an unfinished one. Never used on the token endpoint, whose error bodies
+    can quote the credentials that were sent.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text.strip()[:MAX_ERROR_DETAIL_CHARS]
+    if isinstance(payload, dict):
+        messages = payload.get("messages")
+        if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+            first = messages[0]
+            return str(first.get("message") or first.get("key") or first)[:MAX_ERROR_DETAIL_CHARS]
+    return json.dumps(payload)[:MAX_ERROR_DETAIL_CHARS]
+
+
+def _refused(response: httpx.Response, what: str) -> ComdirectError:
+    detail = _detail(response)
+    return ComdirectError(
+        f"{what} failed with HTTP {response.status_code}" + (f": {detail}" if detail else "")
+    )
 
 
 @dataclass(frozen=True)
@@ -182,7 +204,7 @@ class ComdirectSession:
             headers=self._headers(),
         )
         if response.status_code != httpx.codes.OK:
-            raise ComdirectError(f"session lookup failed with HTTP {response.status_code}")
+            raise _refused(response, "session lookup")
         sessions = response.json()
         if not sessions:
             raise ComdirectError("bank returned no session")
@@ -203,7 +225,7 @@ class ComdirectSession:
             },
         )
         if response.status_code != httpx.codes.CREATED:
-            raise ComdirectError(f"TAN challenge failed with HTTP {response.status_code}")
+            raise _refused(response, "TAN challenge")
 
         info = response.headers.get("x-once-authentication-info")
         if not info:
@@ -216,49 +238,46 @@ class ComdirectSession:
             )
         return str(challenge["id"])
 
-    async def await_approval(self, challenge_id: str) -> None:
-        """Block until the owner approves the push prompt, then take the session.
+    async def activate(self, challenge_id: str) -> None:
+        """Take the session the owner has approved, then upgrade the token.
 
-        The bank answers the activation with 422 while the prompt is still
-        pending, so a rejected activation is not distinguishable from an
-        unanswered one. Anything other than success or 422 is treated as fatal
-        rather than retried.
+        Sent exactly once, and only after the owner says the app accepted the
+        prompt. With photoTAN-Push the bank answers 400 while the approval has
+        not landed, which is the same answer it gives a malformed request, so
+        there is nothing here that can be polled on. Repeating it is worse than
+        useless: the spec locks online banking after five TAN challenges without
+        one being spent, and a challenge cannot be activated twice.
         """
-        deadline = asyncio.get_running_loop().time() + APPROVAL_TIMEOUT_SECONDS
-        last_status: int | None = None
-
-        while asyncio.get_running_loop().time() < deadline:
-            response = await self._http.patch(
-                f"{API_PREFIX}/session/clients/user/v1/sessions/{self._bank_session_id()}",
-                headers=self._headers(
-                    **{
-                        "Content-Type": "application/json",
-                        "x-once-authentication-info": json.dumps({"id": challenge_id}),
-                    }
-                ),
-                json={
-                    "identifier": self._bank_session_id(),
-                    "sessionTanActive": True,
-                    "activated2FA": True,
-                },
+        response = await self._http.patch(
+            f"{API_PREFIX}/session/clients/user/v1/sessions/{self._bank_session_id()}",
+            headers=self._headers(
+                **{
+                    "Content-Type": "application/json",
+                    "x-once-authentication-info": json.dumps({"id": challenge_id}),
+                }
+            ),
+            json={
+                "identifier": self._bank_session_id(),
+                "sessionTanActive": True,
+                "activated2FA": True,
+            },
+        )
+        if response.status_code == httpx.codes.BAD_REQUEST:
+            raise ComdirectError(
+                "the bank rejected the activation. With photoTAN-Push this is what it "
+                "answers when the approval has not reached it yet, so start another "
+                f"check and confirm only once the app says it accepted ({_detail(response)})"
             )
-            last_status = response.status_code
-            if response.status_code == httpx.codes.OK:
-                self._tokens = await self._token_request(
-                    {
-                        "client_id": self._client_id,
-                        "client_secret": self._client_secret,
-                        "grant_type": "cd_secondary",
-                        "token": self._access_token,
-                    }
-                )
-                return
-            if response.status_code != httpx.codes.UNPROCESSABLE_ENTITY:
-                raise ComdirectError(f"session activation failed with HTTP {response.status_code}")
-            await asyncio.sleep(APPROVAL_POLL_SECONDS)
+        if response.status_code != httpx.codes.OK:
+            raise _refused(response, "session activation")
 
-        raise ComdirectError(
-            f"no approval within {APPROVAL_TIMEOUT_SECONDS:.0f}s (last HTTP {last_status})"
+        self._tokens = await self._token_request(
+            {
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+                "grant_type": "cd_secondary",
+                "token": self._access_token,
+            }
         )
 
     async def _get(self, path: str, **params: str) -> Any:
@@ -266,7 +285,7 @@ class ComdirectSession:
             f"{API_PREFIX}{path}", headers=self._headers(), params=params
         )
         if response.status_code != httpx.codes.OK:
-            raise ComdirectError(f"GET {path} failed with HTTP {response.status_code}")
+            raise _refused(response, f"GET {path}")
         return response.json()
 
     async def depot_ids(self) -> list[str]:

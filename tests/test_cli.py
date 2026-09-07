@@ -1,10 +1,11 @@
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
 
 from investment_tools import __main__ as cli
-from investment_tools.checker import Say
+from investment_tools.checker import Confirm, Say
 from investment_tools.config import Config
 from investment_tools.drift import Target
 from investment_tools.history import History
@@ -23,14 +24,26 @@ class StubChecker:
     def __init__(self, config: Config, targets: list[Target], history: History) -> None:
         self._history = history
 
-    async def check(self, say: Say) -> str:
+    async def check(self, say: Say, confirm: Confirm) -> str:
         await say("Approve the login in your photoTAN app.")
+        await confirm()
         return "REPORT BODY"
 
 
 class FailingChecker(StubChecker):
-    async def check(self, say: Say) -> str:
+    async def check(self, say: Say, confirm: Confirm) -> str:
         raise ValueError("the depot holds ZZZ, which the allocation does not name")
+
+
+@pytest.fixture
+def at_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pytest replaces stdin, so a check would otherwise refuse to start."""
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(cli, "_confirm", _confirmed_at_once)
+
+
+async def _confirmed_at_once() -> None:
+    """Stands in for the owner reaching for their phone."""
 
 
 @pytest.fixture
@@ -50,7 +63,10 @@ def configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 def test_check_puts_the_report_on_stdout_and_progress_on_stderr(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], configured: Path
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    configured: Path,
+    at_a_terminal: None,
 ) -> None:
     # Redirecting the report to a file must not swallow the line telling you to
     # reach for your phone, and must not capture it either.
@@ -65,7 +81,7 @@ def test_check_puts_the_report_on_stdout_and_progress_on_stderr(
 
 
 def test_check_runs_without_any_telegram_settings(
-    monkeypatch: pytest.MonkeyPatch, configured: Path
+    monkeypatch: pytest.MonkeyPatch, configured: Path, at_a_terminal: None
 ) -> None:
     monkeypatch.setattr(cli, "DepotChecker", StubChecker)
     assert cli.main(["check"]) == 0
@@ -76,7 +92,10 @@ def test_the_bot_still_needs_its_telegram_settings(configured: Path) -> None:
 
 
 def test_a_rejected_depot_exits_non_zero(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], configured: Path
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    configured: Path,
+    at_a_terminal: None,
 ) -> None:
     monkeypatch.setattr(cli, "DepotChecker", FailingChecker)
 
@@ -102,3 +121,18 @@ def test_progress_never_lands_on_stdout(capsys: pytest.CaptureFixture[str]) -> N
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.strip() == "reaching for the phone"
+
+
+def test_a_check_without_a_terminal_never_reaches_the_bank(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], configured: Path
+) -> None:
+    # Reaching the bank at all spends one of the five TAN challenges it allows
+    # before it locks online banking, so this has to fail before the login.
+    def explode(*_: object) -> object:
+        raise AssertionError("the bank must not be touched without a terminal")
+
+    monkeypatch.setattr(cli, "DepotChecker", explode)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+
+    assert cli.main(["check"]) == 1
+    assert "needs a terminal" in capsys.readouterr().err

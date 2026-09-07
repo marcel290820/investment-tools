@@ -11,9 +11,13 @@ which positions have wandered far enough to be worth acting on.
 You trigger it yourself, from a terminal or with `/check` in Telegram. It is
 not on a timer, because comdirect has no unattended login: every API session
 starts with a two-factor approval, and the session dies with its tokens roughly
-ten minutes later. With photoTAN-Push you never type a TAN. The bank pushes a
-prompt to the photoTAN app, you approve it there, and the check continues. No
-second factor passes through Telegram or through your shell history.
+ten minutes later.
+
+With photoTAN-Push you never type a TAN. The bank pushes a prompt to the
+photoTAN app and you approve it there, so no second factor passes through
+Telegram or through your shell history. The bank offers no way to ask whether
+you have approved yet, so you say so: press Enter in the terminal, or send
+`/done` in Telegram. Only then does the tool claim the session.
 
 The depot is only ever read. Nothing here places an order.
 
