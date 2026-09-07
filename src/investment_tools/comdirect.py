@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -28,6 +29,8 @@ from typing import Any
 import httpx
 
 from .drift import Position
+
+logger = logging.getLogger(__name__)
 
 API_ROOT = "https://api.comdirect.de"
 TOKEN_URL = f"{API_ROOT}/oauth/token"
@@ -94,18 +97,21 @@ class ComdirectSession:
         self._session_id = secrets.token_hex(16)
         self._tokens: _Tokens | None = None
         self._bank_session: str | None = None
+        self.revoked = False
+        """True once the bank has confirmed the session is dead."""
 
     async def __aenter__(self) -> ComdirectSession:
         return self
 
     async def __aexit__(self, *_: object) -> None:
-        # Revoking ends the session TAN as well, which is what the spec asks for
-        # when the application stops. Best effort: a failure here must not mask
-        # whatever the caller was actually doing.
+        # The token this holds can trade, so it is revoked the moment the reads
+        # are done rather than left to expire. A failure here must not mask the
+        # caller's own exception, but it must not vanish either: callers read
+        # `revoked` to find out whether the session is actually dead.
         try:
             await self.revoke()
-        except (ComdirectError, httpx.HTTPError):
-            pass
+        except (ComdirectError, httpx.HTTPError) as error:
+            logger.error("could not revoke the bank session: %s", error)
         finally:
             if self._owns_http:
                 await self._http.aclose()
@@ -304,9 +310,20 @@ class ComdirectSession:
         return list(merged.values())
 
     async def revoke(self) -> None:
+        """Invalidate the access token, refresh token and session TAN.
+
+        The spec returns 204 on success and says all three die together. Any
+        other status means the session is still live and still able to trade
+        until it expires, so it is an error rather than something to shrug at.
+        """
         if self._tokens is None:
+            self.revoked = True
             return
-        await self._http.delete(
-            REVOKE_URL, headers={"Authorization": f"Bearer {self._access_token}"}
-        )
+        token = self._access_token
+        # Cleared first: whatever the bank answers, this object must not keep
+        # using a token it has just tried to throw away.
         self._tokens = None
+        response = await self._http.delete(REVOKE_URL, headers={"Authorization": f"Bearer {token}"})
+        if response.status_code != httpx.codes.NO_CONTENT:
+            raise ComdirectError(f"revoke returned HTTP {response.status_code}, expected 204")
+        self.revoked = True

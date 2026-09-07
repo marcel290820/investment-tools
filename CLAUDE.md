@@ -88,6 +88,16 @@ retrying, because three bad TAN entries lock online banking.
 Read-only means read-only. The API exposes order placement under `/brokerage/v3/orders`.
 Nothing in this repo calls it.
 
+That is not the whole guarantee, because the scope comdirect hands back is
+`BANKING_RO BROKERAGE_RW SESSION_RW`: the token this bot holds *can* trade, and
+once a session TAN is active further operations need no new TAN. So the session
+is revoked as soon as the reads finish rather than left to expire. `DELETE
+/oauth/revoke` answers 204 and kills the access token, the refresh token and the
+session TAN together; any other status means the session is still live, so it
+raises. `ComdirectSession.revoked` records whether the bank confirmed it, and the
+bot tells the owner when it did not. Do not weaken that call into a best-effort
+fire-and-forget.
+
 ## Deployment
 
 Hetzner VPS, Ubuntu 24.04, x86_64, 7.6 GB RAM. Reached over the `hetzner` ssh alias.

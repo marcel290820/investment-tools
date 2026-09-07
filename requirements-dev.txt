@@ -37,6 +37,10 @@ pluggy==1.6.0
 pygments==2.21.0
     # via pytest
 pytest==9.1.1
+    # via
+    #   investment-tools (pyproject.toml)
+    #   pytest-asyncio
+pytest-asyncio==1.3.0
     # via investment-tools (pyproject.toml)
 python-telegram-bot==22.8
     # via investment-tools (pyproject.toml)
@@ -46,3 +50,4 @@ typing-extensions==4.16.0
     # via
     #   anyio
     #   mypy
+    #   pytest-asyncio
