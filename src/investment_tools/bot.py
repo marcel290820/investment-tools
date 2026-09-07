@@ -7,64 +7,32 @@ runs when they ask for it rather than on a timer.
 
 from __future__ import annotations
 
-import asyncio
+import html
 import logging
-from datetime import UTC, datetime
 
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-from .comdirect import ComdirectError, ComdirectSession
-from .config import Config
-from .drift import Target, calculate
+from .checker import CheckInProgress, DepotChecker
+from .comdirect import ComdirectError
+from .config import Config, TelegramConfig
+from .drift import Target
 from .history import History
-from .report import format_report
 
 logger = logging.getLogger(__name__)
 
 
-class DepotChecker:
-    """Runs one depot check at a time, on request."""
+def telegram_html(text: str) -> str:
+    """Wrap plain report text for Telegram.
 
-    def __init__(self, config: Config, targets: list[Target], history: History) -> None:
-        self._config = config
-        self._targets = targets
-        self._history = history
-        self._lock = asyncio.Lock()
-
-    async def check(self, say: _Say) -> None:
-        if self._lock.locked():
-            await say("A check is already running. Approve the prompt in the photoTAN app.")
-            return
-
-        async with self._lock:
-            async with ComdirectSession(
-                client_id=self._config.comdirect_client_id,
-                client_secret=self._config.comdirect_client_secret,
-                username=self._config.comdirect_username,
-                password=self._config.comdirect_password,
-            ) as session:
-                challenge_id = await session.start_login()
-                await say("Approve the login in your photoTAN app.")
-                await session.await_approval(challenge_id)
-                positions = await session.all_positions()
-
-            if not session.revoked:
-                # The bank did not confirm the session is dead, and the token it
-                # issued can place orders. Say so rather than let it lapse quietly.
-                await say(
-                    "Warning: the bank did not confirm the session was revoked. "
-                    "It expires on its own within about 10 minutes. "
-                    "If you did not trigger this check, change your PIN."
-                )
-
-            now = datetime.now(UTC)
-            report = calculate(positions, self._targets)
-            # Record before reading the runs back, so a breach that starts
-            # today is reported as starting today rather than as unknown.
-            self._history.record(report, now=now)
-            await say(format_report(report, now=now, breach_runs=self._history.breach_runs()))
+    <pre> because the report is a column-aligned table and Telegram's
+    proportional font would shear it. Escaped because fund names come from the
+    bank: a holding called "S&P 500" would otherwise make Telegram reject the
+    whole message. Only <, > and & need escaping, and quotes inside <pre> read
+    better left alone.
+    """
+    return f"<pre>{html.escape(text, quote=False)}</pre>"
 
 
 class _Say:
@@ -76,16 +44,16 @@ class _Say:
     async def __call__(self, text: str) -> None:
         message = self._update.effective_message
         if message is not None:
-            await message.reply_text(text, parse_mode=ParseMode.HTML)
+            await message.reply_text(telegram_html(text), parse_mode=ParseMode.HTML)
 
 
-def run(config: Config, targets: list[Target]) -> None:
+def run(config: Config, telegram: TelegramConfig, targets: list[Target]) -> None:
     """Build the bot and serve /check until the process is stopped."""
     checker = DepotChecker(config, targets, History(config.history_db_path))
 
     async def check_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
-        if chat is None or chat.id != config.telegram_chat_id:
+        if chat is None or chat.id != telegram.chat_id:
             # Anyone can message a bot if they find its name. Portfolio figures
             # go to exactly one chat and no error goes back to the others.
             logger.warning("ignored /check from unauthorised chat")
@@ -93,14 +61,18 @@ def run(config: Config, targets: list[Target]) -> None:
 
         say = _Say(update)
         try:
-            await checker.check(say)
+            report = await checker.check(say)
+        except CheckInProgress as error:
+            await say(str(error))
         except ComdirectError as error:
             logger.warning("depot check failed: %s", error)
             await say(f"Check failed: {error}")
         except ValueError as error:
             logger.warning("allocation rejected the depot: %s", error)
             await say(f"Check failed: {error}")
+        else:
+            await say(report)
 
-    application = ApplicationBuilder().token(config.telegram_bot_token).build()
+    application = ApplicationBuilder().token(telegram.bot_token).build()
     application.add_handler(CommandHandler("check", check_command))
     application.run_polling()

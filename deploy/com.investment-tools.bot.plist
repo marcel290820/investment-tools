@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the Telegram bot answering /check while you are logged in.
+
+  Only needed if you want /check from your phone. The terminal front end
+  (`investment-tools check`) needs none of this.
+
+  Replace /Users/YOU with your home directory and REPO with the path to this
+  repository, then:
+
+    install -m 644 deploy/com.investment-tools.bot.plist \
+        ~/Library/LaunchAgents/com.investment-tools.bot.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.investment-tools.bot.plist
+
+  To stop it:
+
+    launchctl bootout gui/$(id -u)/com.investment-tools.bot
+
+  A laptop is not a server. The bot answers only while this machine is awake
+  and logged in; asleep, /check goes unanswered until it wakes.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.investment-tools.bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <!--
+          The credentials stay in one file at mode 600, out of this plist and
+          out of the repository. `set -a` exports what that file defines and
+          the shell does the quoting, so nothing here needs a parser.
+        -->
+        <string>set -a; . "$HOME/.config/investment-tools/env"; set +a; exec REPO/.venv/bin/investment-tools bot</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Do not spin if it cannot start; one attempt every half minute. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- launchd captures the stream; the program still only writes to stderr. -->
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/investment-tools.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/investment-tools.log</string>
+</dict>
+</plist>
