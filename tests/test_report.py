@@ -75,3 +75,21 @@ def test_a_fresh_breach_reads_as_one_check() -> None:
     runs = {"AAA": BreachRun(since=NOW, checks=1)}
     text = format_report(report, now=NOW, breach_runs=runs)
     assert "0 days and 1 check" in text
+
+
+def test_the_report_carries_no_markup() -> None:
+    # The terminal prints this as it stands. Markup belongs to whichever front
+    # end needs it, and the Telegram one adds its own.
+    report = report_for({"AAA": "30000", "BBB": "70000"}, {"AAA": "40", "BBB": "60"})
+    text = format_report(report, now=NOW)
+    assert "<" not in text
+    assert ">" not in text
+
+
+def test_columns_line_up_under_a_monospace_font() -> None:
+    report = report_for({"AAA": "30000", "BBB": "70000"}, {"AAA": "40", "BBB": "60"})
+    lines = format_report(report, now=NOW).splitlines()
+    header_at = next(index for index, line in enumerate(lines) if "Position" in line)
+    rows = lines[header_at + 1 : header_at + 1 + len(report.rows)]
+    assert len(rows) == 2
+    assert all(len(row) == len(lines[header_at]) for row in rows)

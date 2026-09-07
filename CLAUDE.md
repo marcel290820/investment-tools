@@ -7,41 +7,54 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Personal tooling for managing investments. One tool exists per concern; they share
 this repo but not a framework.
 
-**First tool: allocation drift bot.** Reads the owner's comdirect depot
-read-only, compares it against a target allocation, and reports drift over
-Telegram on a `/check` command.
+**First tool: allocation drift tracker.** Reads the owner's comdirect depot
+read-only, compares it against a target allocation, and reports drift. It runs
+on the owner's laptop, not on a server, and has two front ends: `investment-tools
+check` in a terminal and `/check` in Telegram.
 
 Layering runs one way: `drift` and `report` are pure and import nothing from this
-package's edges; `comdirect`, `history` and `bot` are the edges; `config` is the
+package's edges; `checker` orchestrates one check without knowing who asked;
+`comdirect`, `history`, `bot` and `__main__` are the edges; `config` is the
 boundary where untrusted input becomes typed values. Keep it that way. Anything
 that needs a network or a file to test does not belong in `drift` or `report`,
 which is why `format_report` takes breach runs as an argument instead of querying
 for them.
 
+`DepotChecker.check` returns the report and sends only progress through its `say`
+callback. That split is what lets the terminal put the report on stdout and the
+"approve the prompt" line on stderr. Do not collapse it by having the checker
+print.
+
+`format_report` emits plain text with no markup. Telegram needs a monospace block
+and HTML escaping, so `bot` adds both; a terminal needs neither. Fund names come
+from the bank, so any front end that renders markup escapes them.
+
 `history` is a SQLite file holding one row per position per check. Amounts and
 shares are stored as text: a value written through a float and read back is no
 longer the number that was measured. It is also a record of real holdings, so it
-belongs on the server and never in the repository.
+lives at `~/.local/state/investment-tools/history.db` and never in the repository.
 
-The bot reads. It has no command that allocates, transfers or orders, and adding
-one is a decision the owner makes, not a natural next feature.
+The tool reads. Neither front end has a command that allocates, transfers or
+orders, and adding one is a decision the owner makes, not a natural next feature.
 
 ## This repository is public
 
 Nothing sensitive is ever tracked. Credentials, account numbers, depot IDs, ISINs
 tied to real holdings, Telegram chat IDs, and the target allocation itself are read
-from the environment or from a file that lives only on the server. Test fixtures use
-invented values. `.gitignore` blocks `.env*`, `secrets/`, key material, and `data/`;
-a commit hook runs gitleaks on the staged diff.
+from the environment or from files under `~/.config/investment-tools`, mode 600.
+Test fixtures use invented values. `.gitignore` blocks `.env*`, `secrets/`, key
+material, and `data/`; a commit hook runs gitleaks on the staged diff.
 
 When a new config value appears, add its name to `.env.example` with an empty value,
 never a sample that looks real.
 
 ## Stack
 
-Python 3.12. The VPS runs 3.12.3, so that is the floor and the ceiling. Chosen over
-Node because every maintained comdirect client is Python and the API is plain REST
-with no vendor SDK on either side.
+Python 3.12, pinned in `pyproject.toml` and matched by CI. Chosen over Node because
+every maintained comdirect client is Python and the API is plain REST with no vendor
+SDK on either side. Nothing here needs a newer interpreter, so the pin only moves
+when there is a reason to move it, and the lockfiles get regenerated in the same
+change.
 
 ## comdirect API
 
@@ -71,15 +84,15 @@ upgrade. The access token lives 599 seconds. The spec states the session TAN sta
 valid only until the last access/refresh token expires, and requires that any
 auto-refresh loop stop when the application stops, which kills the session.
 
-So an unattended daily timer cannot authenticate on its own. The bot therefore runs
-on demand: `/check` starts a login, the owner approves the push prompt in the
-comdirect photoTAN app, the bot reads the depot and revokes the token. One short
+So an unattended daily timer cannot authenticate on its own. The tool therefore runs
+on demand: a check starts a login, the owner approves the push prompt in the
+comdirect photoTAN app, the tool reads the depot and revokes the token. One short
 burst per check, no resident session.
 
 photoTAN-Push is the only TAN method this supports. The spec is explicit that push
 approval needs no `x-once-authentication` header, so no second factor ever passes
-through the bot or through Telegram. Do not add a code-entry path; it would move a
-TAN into a chat log.
+through this program, through Telegram or through a shell history. Do not add a
+code-entry path.
 
 The activation call answers 422 while the prompt is unanswered, which is
 indistinguishable from a rejection. Treat any other status as fatal rather than
@@ -100,23 +113,26 @@ fire-and-forget.
 
 ## Deployment
 
-Hetzner VPS, Ubuntu 24.04, x86_64, 7.6 GB RAM. Reached over the `hetzner` ssh alias.
-No Docker installed, and none is wanted for a job this small.
+The owner's laptop, macOS. It ran on a Hetzner VPS for one day and was taken off
+again: a bank credential on a rented box in a shared account bought nothing, since
+the checks are manual anyway and a laptop that is closed is a laptop nothing can
+reach. Do not propose moving it back.
 
-`deploy/investment-tools.service` follows the pattern already running there at
-`/opt/daily-digest`: code in `/opt/<tool>` owned by a dedicated unprivileged user,
-a venv, secrets in a root-owned `/etc/<tool>/env` pulled in with `EnvironmentFile`,
-and the systemd hardening flags. It differs in one way: the bot listens for a
-command, so it is a `Restart=always` service rather than a oneshot plus a timer.
-
-Read `systemctl cat daily-digest@.service` on the VPS before changing the unit.
+The venv lives in the repository, config and secrets in `~/.config/investment-tools`
+at mode 600, the history database in `~/.local/state/investment-tools`. The CLI is
+the primary interface and needs no supervisor. `deploy/com.investment-tools.bot.plist`
+is a launchd agent for the Telegram bot alone, and only for the owner who wants
+`/check` from a phone.
 
 ## Conventions
 
 Money is a decimal amount plus a currency, never a float. Timestamps are stored in
-UTC and converted only for display in the Telegram message. The comdirect client and
-the Telegram sender are boundary code; drift calculation takes positions and a target
-allocation as plain values and needs no network to test.
+UTC and converted only for display. The comdirect client, the Telegram sender and
+the argument parser are boundary code; drift calculation takes positions and a
+target allocation as plain values and needs no network to test.
+
+The CLI follows the usual contract: the report on stdout, everything else on
+stderr, zero on success and non-zero on failure.
 
 ## Commands
 

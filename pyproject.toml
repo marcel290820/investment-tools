@@ -8,6 +8,9 @@ dependencies = [
     "python-telegram-bot==22.8",
 ]
 
+[project.scripts]
+investment-tools = "investment_tools.__main__:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest==9.1.1",

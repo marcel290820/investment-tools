@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from investment_tools.config import load_targets
+from investment_tools.config import load_config, load_targets, load_telegram_config
 
 
 def write(tmp_path: Path, body: str) -> Path:
@@ -61,3 +61,40 @@ def test_an_out_of_range_share_is_rejected(tmp_path: Path) -> None:
 def test_a_missing_share_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no share_pct"):
         load_targets(write(tmp_path, '[[position]]\nwkn = "AAA"\n'))
+
+
+def test_the_bank_credentials_load_without_any_telegram_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    for name in (
+        "COMDIRECT_CLIENT_ID",
+        "COMDIRECT_CLIENT_SECRET",
+        "COMDIRECT_USERNAME",
+        "COMDIRECT_PASSWORD",
+    ):
+        monkeypatch.setenv(name, "x")
+
+    config = load_config()
+    assert config.comdirect_username == "x"
+    assert config.allocation_path.is_absolute()
+
+
+def test_a_non_numeric_chat_id_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "not-a-number")
+    with pytest.raises(ValueError, match="must be an integer"):
+        load_telegram_config()
+
+
+def test_credentials_stay_out_of_the_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A config in a traceback must not hand the PIN to whoever reads the log.
+    for name in (
+        "COMDIRECT_CLIENT_ID",
+        "COMDIRECT_CLIENT_SECRET",
+        "COMDIRECT_USERNAME",
+        "COMDIRECT_PASSWORD",
+    ):
+        monkeypatch.setenv(name, "s3cret")
+    assert "s3cret" not in repr(load_config())

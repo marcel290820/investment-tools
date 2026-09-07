@@ -14,21 +14,30 @@ from pathlib import Path
 
 from .drift import Target
 
-DEFAULT_ALLOCATION_PATH = Path("/etc/investment-tools/allocation.toml")
-# systemd StateDirectory=investment-tools lands here.
-DEFAULT_HISTORY_DB_PATH = Path("/var/lib/investment-tools/history.db")
+# Relative to $HOME, resolved when the config is read rather than at import,
+# so importing this module still depends on nothing outside it.
+ALLOCATION_RELATIVE = Path(".config/investment-tools/allocation.toml")
+HISTORY_DB_RELATIVE = Path(".local/state/investment-tools/history.db")
 
 
 @dataclass(frozen=True)
 class Config:
+    """What a depot check needs, whichever front end asked for it."""
+
     comdirect_client_id: str = field(repr=False)
     comdirect_client_secret: str = field(repr=False)
     comdirect_username: str = field(repr=False)
     comdirect_password: str = field(repr=False)
-    telegram_bot_token: str = field(repr=False)
-    telegram_chat_id: int
     allocation_path: Path
     history_db_path: Path
+
+
+@dataclass(frozen=True)
+class TelegramConfig:
+    """Only the bot front end needs these, so only it asks for them."""
+
+    bot_token: str = field(repr=False)
+    chat_id: int
 
 
 def _required(name: str) -> str:
@@ -39,29 +48,34 @@ def _required(name: str) -> str:
 
 
 def load_config() -> Config:
+    home = Path.home()
+    return Config(
+        comdirect_client_id=_required("COMDIRECT_CLIENT_ID"),
+        comdirect_client_secret=_required("COMDIRECT_CLIENT_SECRET"),
+        comdirect_username=_required("COMDIRECT_USERNAME"),
+        comdirect_password=_required("COMDIRECT_PASSWORD"),
+        allocation_path=Path(os.environ.get("ALLOCATION_PATH") or home / ALLOCATION_RELATIVE),
+        history_db_path=Path(os.environ.get("HISTORY_DB_PATH") or home / HISTORY_DB_RELATIVE),
+    )
+
+
+def load_telegram_config() -> TelegramConfig:
+    """Read the bot settings. Only `investment-tools bot` calls this, so the
+    terminal front end runs without a bot token at all."""
     chat_id = _required("TELEGRAM_CHAT_ID")
     try:
         chat_id_int = int(chat_id)
     except ValueError:
         raise ValueError("TELEGRAM_CHAT_ID must be an integer") from None
 
-    return Config(
-        comdirect_client_id=_required("COMDIRECT_CLIENT_ID"),
-        comdirect_client_secret=_required("COMDIRECT_CLIENT_SECRET"),
-        comdirect_username=_required("COMDIRECT_USERNAME"),
-        comdirect_password=_required("COMDIRECT_PASSWORD"),
-        telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
-        telegram_chat_id=chat_id_int,
-        allocation_path=Path(os.environ.get("ALLOCATION_PATH") or DEFAULT_ALLOCATION_PATH),
-        history_db_path=Path(os.environ.get("HISTORY_DB_PATH") or DEFAULT_HISTORY_DB_PATH),
-    )
+    return TelegramConfig(bot_token=_required("TELEGRAM_BOT_TOKEN"), chat_id=chat_id_int)
 
 
 def load_targets(path: Path) -> list[Target]:
     """Read the target allocation.
 
-    The file lives on the server, never in the repository: it describes what the
-    owner actually holds.
+    The file lives outside the repository: it describes what the owner actually
+    holds.
     """
     with path.open("rb") as handle:
         document = tomllib.load(handle)
