@@ -50,6 +50,15 @@ class DepotChecker:
                 await session.await_approval(challenge_id)
                 positions = await session.all_positions()
 
+            if not session.revoked:
+                # The bank did not confirm the session is dead, and the token it
+                # issued can place orders. Say so rather than let it lapse quietly.
+                await say(
+                    "Warning: the bank did not confirm the session was revoked. "
+                    "It expires on its own within about 10 minutes. "
+                    "If you did not trigger this check, change your PIN."
+                )
+
             now = datetime.now(UTC)
             report = calculate(positions, self._targets)
             # Record before reading the runs back, so a breach that starts
