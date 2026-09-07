@@ -7,6 +7,9 @@ the two apart.
 
 Amounts are kept as text. A share written through a float and read back is no
 longer the number that was measured.
+
+The file is a record of real holdings, so it is kept readable only by its owner.
+That used to be systemd's UMask=0077; running as a person, nothing else sets it.
 """
 
 from __future__ import annotations
@@ -41,6 +44,9 @@ class History:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+        # After connecting, so the file exists. Reapplied every time rather than
+        # only on creation, which repairs a file that predates this.
+        self._path.chmod(0o600)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
