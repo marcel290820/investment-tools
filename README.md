@@ -17,6 +17,11 @@ through Telegram.
 
 The depot is only ever read. Nothing here places an order.
 
+comdirect issues a token with brokerage write access whether you want it or not,
+so the session is revoked the moment the reads finish instead of being left to
+expire. If the bank does not confirm the revocation, the bot says so in the same
+message rather than letting it lapse quietly.
+
 ### Tolerance bands
 
 A position is flagged once it moves either 5 percentage points or a quarter of
