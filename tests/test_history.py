@@ -92,3 +92,14 @@ def test_amounts_are_stored_exactly_and_not_through_a_float(tmp_path: Path) -> N
         stored = dict(connection.execute("SELECT wkn, value_eur FROM observation").fetchall())
     assert stored["AAA"] == "40000.07"
     assert Decimal(stored["BBB"]) == Decimal("29999.93")
+
+
+def test_the_history_is_readable_only_by_its_owner(tmp_path: Path) -> None:
+    # It records real holdings, and no supervisor sets a umask for it any more.
+    path = tmp_path / "history.db"
+    path.write_bytes(b"")
+    path.chmod(0o644)
+
+    History(path)
+
+    assert path.stat().st_mode & 0o777 == 0o600
