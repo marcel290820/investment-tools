@@ -1,4 +1,9 @@
-"""Turn a drift report into the message the owner reads. Pure formatting."""
+"""Turn a drift report into the text the owner reads. Pure formatting.
+
+Plain text, no markup: the terminal prints it as it stands and the Telegram
+front end wraps and escapes it there. The table is column-aligned, so whoever
+displays it owes it a monospace font.
+"""
 
 from __future__ import annotations
 
@@ -51,7 +56,7 @@ def format_report(
     now: datetime,
     breach_runs: dict[str, BreachRun] | None = None,
 ) -> str:
-    """Render the report as Telegram HTML."""
+    """Render the report as plain text."""
     runs = breach_runs or {}
     breached = report.breached
     if len(breached) == 1:
@@ -62,14 +67,12 @@ def format_report(
         headline = "All positions inside their bands"
 
     lines = [
-        f"<b>{headline}</b>",
+        headline,
         f"Depot {_eur(report.total_eur)} EUR, {now:%d.%m.%Y %H:%M}",
         "",
-        "<pre>",
         f"  {'Position':<22} {'now':>6} {'target':>6} {'dev':>6} {'band':>5}",
     ]
     lines.extend(_row(drift) for drift in report.rows)
-    lines.append("</pre>")
 
     if breached:
         # A band this wide is not tripped by a short move, so what separates a

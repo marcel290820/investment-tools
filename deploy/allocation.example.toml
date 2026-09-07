@@ -1,6 +1,6 @@
-# Target allocation. The real file lives only on the server at
-# /etc/investment-tools/allocation.toml and describes real holdings, so it is
-# never committed. The numbers below are invented.
+# Target allocation. The real file lives at
+# ~/.config/investment-tools/allocation.toml and describes real holdings, so it
+# is never committed. The numbers below are invented.
 #
 # share_pct values must add up to 100. Tolerance bands are derived, not
 # configured: a position is flagged once it moves either 5 percentage points or
