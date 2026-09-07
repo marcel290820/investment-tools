@@ -25,10 +25,48 @@ async def _progress(text: str) -> None:
     print(text, file=sys.stderr, flush=True)
 
 
+async def _confirm() -> None:
+    """Wait for Enter.
+
+    The bank cannot be asked whether the push has been approved, so a person has
+    to say so. Reading the descriptor directly rather than through a thread keeps
+    Ctrl-C working: a cancelled wait still unwinds into the revoke.
+    """
+    print(
+        "Press Enter once the photoTAN app says it accepted it: ",
+        end="",
+        file=sys.stderr,
+        flush=True,
+    )
+    loop = asyncio.get_running_loop()
+    pressed: asyncio.Future[None] = loop.create_future()
+
+    def _on_readable() -> None:
+        sys.stdin.readline()
+        if not pressed.done():
+            pressed.set_result(None)
+
+    loop.add_reader(sys.stdin.fileno(), _on_readable)
+    try:
+        await pressed
+    finally:
+        loop.remove_reader(sys.stdin.fileno())
+
+
 async def _check(config: Config, targets: list[Target]) -> int:
+    if not sys.stdin.isatty():
+        # Checked before the login, because reaching the bank at all spends one
+        # of the five TAN challenges it allows before it locks online banking.
+        print(
+            "check needs a terminal: nothing but you can tell the bank that you "
+            "approved the prompt in the photoTAN app.",
+            file=sys.stderr,
+        )
+        return 1
+
     checker = DepotChecker(config, targets, History(config.history_db_path))
     try:
-        report = await checker.check(_progress)
+        report = await checker.check(_progress, _confirm)
     except (CheckInProgress, ComdirectError, ValueError) as error:
         print(f"check failed: {error}", file=sys.stderr)
         return 1
