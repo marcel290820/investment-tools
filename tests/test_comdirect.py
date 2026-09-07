@@ -116,3 +116,76 @@ async def test_a_failing_revoke_does_not_mask_the_original_error() -> None:
             raise RuntimeError("depot read failed")
 
     assert not bank.revoked  # and the caller can see the session outlived us
+
+
+def in_session(handler: Callable[[httpx.Request], httpx.Response]) -> ComdirectSession:
+    """A logged-in session that has already asked for a TAN challenge."""
+    bank = logged_in(handler)
+    bank._bank_session = "session-uuid"
+    return bank
+
+
+@pytest.mark.asyncio
+async def test_a_pending_approval_is_never_retried(calls: list[httpx.Request]) -> None:
+    # The bank answers 400 until the push is approved, and 400 is also what it
+    # answers a malformed request, so there is nothing safe to poll on. Five TAN
+    # challenges without one being spent locks online banking.
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(400, json={"messages": [{"message": "TAN nicht bestaetigt"}]})
+        return httpx.Response(204)
+
+    bank = in_session(handler)
+
+    with pytest.raises(ComdirectError) as refusal:
+        await bank.activate("challenge-1")
+
+    assert [c.method for c in calls] == ["PATCH"]
+    assert "photoTAN-Push" in str(refusal.value)
+    assert "TAN nicht bestaetigt" in str(refusal.value)
+
+
+@pytest.mark.asyncio
+async def test_activation_carries_the_challenge_id(calls: list[httpx.Request]) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(200, json={"identifier": "session-uuid"})
+        return httpx.Response(200, json={"access_token": "traded-up", "refresh_token": "refresh-2"})
+
+    bank = in_session(handler)
+    await bank.activate("challenge-1")
+
+    patch = calls[0]
+    assert patch.url.path.endswith("/sessions/session-uuid")
+    assert patch.headers["x-once-authentication-info"] == '{"id": "challenge-1"}'
+    # No TAN is ever sent: with push the approval happens in the app.
+    assert "x-once-authentication" not in patch.headers
+
+
+@pytest.mark.asyncio
+async def test_a_successful_activation_upgrades_the_token(calls: list[httpx.Request]) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(200, json={"identifier": "session-uuid"})
+        return httpx.Response(200, json={"access_token": "traded-up", "refresh_token": "refresh-2"})
+
+    bank = in_session(handler)
+    await bank.activate("challenge-1")
+
+    assert [c.method for c in calls] == ["PATCH", "POST"]
+    assert b"grant_type=cd_secondary" in calls[1].content
+    assert bank._access_token == "traded-up"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_repeats_what_the_bank_said() -> None:
+    # A bare status code is what made the first live failure undiagnosable.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"messages": [{"message": "Session ist abgelaufen"}]})
+
+    bank = in_session(handler)
+    with pytest.raises(ComdirectError, match="Session ist abgelaufen"):
+        await bank.activate("challenge-1")

@@ -12,8 +12,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from typing import Protocol
 
-from .comdirect import ComdirectSession
+from .comdirect import ComdirectError, ComdirectSession
 from .config import Config
 from .drift import Target, calculate
 from .history import History
@@ -22,9 +23,28 @@ from .report import format_report
 Say = Callable[[str], Awaitable[None]]
 """Where progress and warnings go. The report itself is returned, not said."""
 
+Confirm = Callable[[], Awaitable[None]]
+"""Resolves once the owner says the photoTAN app accepted the prompt.
+
+There is nothing to poll. With photoTAN-Push the bank answers the activation
+with 400 until the approval lands, which is the same answer it gives a malformed
+request, and repeating the call risks the lockout counters in the spec. So a
+person tells us, and only then does the activation go out.
+"""
+
+# A bounded wait, because until it ends the bank session is open and the token
+# it issued can trade.
+APPROVAL_TIMEOUT_SECONDS = 180.0
+
 
 class CheckInProgress(RuntimeError):
     """A check is already running. The bank holds one session at a time."""
+
+
+class Check(Protocol):
+    """All a front end needs from a checker: ask, be told, get a report back."""
+
+    async def check(self, say: Say, confirm: Confirm) -> str: ...
 
 
 class DepotChecker:
@@ -36,11 +56,12 @@ class DepotChecker:
         self._history = history
         self._lock = asyncio.Lock()
 
-    async def check(self, say: Say) -> str:
+    async def check(self, say: Say, confirm: Confirm) -> str:
         """Read the depot and return the report.
 
         Raises CheckInProgress if one is already running, ComdirectError if the
-        bank refuses, and ValueError if the depot does not match the targets.
+        bank refuses or nobody confirms in time, and ValueError if the depot does
+        not match the targets.
         """
         if self._lock.locked():
             raise CheckInProgress(
@@ -56,7 +77,14 @@ class DepotChecker:
             ) as session:
                 challenge_id = await session.start_login()
                 await say("Approve the login in your photoTAN app.")
-                await session.await_approval(challenge_id)
+                try:
+                    async with asyncio.timeout(APPROVAL_TIMEOUT_SECONDS):
+                        await confirm()
+                except TimeoutError:
+                    raise ComdirectError(
+                        f"nobody confirmed the approval within {APPROVAL_TIMEOUT_SECONDS:.0f}s"
+                    ) from None
+                await session.activate(challenge_id)
                 positions = await session.all_positions()
 
             if not session.revoked:

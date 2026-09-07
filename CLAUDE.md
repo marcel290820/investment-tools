@@ -94,9 +94,25 @@ approval needs no `x-once-authentication` header, so no second factor ever passe
 through this program, through Telegram or through a shell history. Do not add a
 code-entry path.
 
-The activation call answers 422 while the prompt is unanswered, which is
-indistinguishable from a rejection. Treat any other status as fatal rather than
-retrying, because three bad TAN entries lock online banking.
+**The approval cannot be polled, and this was learned the hard way.** The spec
+documents only 200 and 422 for the activation call. In practice, with
+photoTAN-Push the bank answers **400** for as long as the approval has not
+reached it, which is the same answer it gives a malformed request. There is
+therefore no status that means "still waiting", and an earlier version of this
+code polled on 422 and died 66 ms into the first check.
+
+So a person tells the tool when the app accepted it: Enter in the terminal,
+`/done` in Telegram. The activation then goes out exactly once. Do not
+reintroduce a retry loop.
+
+Three counters make retrying expensive, all from the spec:
+
+- five TAN challenges without one being spent locks online banking
+- three wrong TAN entries locks online banking
+- a challenge cannot be activated twice, so 2.3 and 2.4 are one pair
+
+Every failed check costs one of those five challenges. Get a change right before
+running it against the real account.
 
 Read-only means read-only. The API exposes order placement under `/brokerage/v3/orders`.
 Nothing in this repo calls it.
@@ -132,13 +148,24 @@ the argument parser are boundary code; drift calculation takes positions and a
 target allocation as plain values and needs no network to test.
 
 The CLI follows the usual contract: the report on stdout, everything else on
-stderr, zero on success and non-zero on failure.
+stderr, zero on success and non-zero on failure. It refuses to start without a
+terminal, and refuses before the login rather than after, because reaching the
+bank at all spends one of the five TAN challenges.
+
+The Telegram `/check` handler is registered with `block=False`. Without it the
+update loop sits inside the running check and `/done` never arrives, which
+deadlocks the bot on the one message it is waiting for.
 
 ## Commands
 
 `./.claude/check.sh` runs ruff, ruff format, mypy strict and pytest. CI runs the
 same script, and so does the commit gate, so a green run locally means a green run
 everywhere. Run a single test file with `pytest tests/test_drift.py`.
+
+Errors from the bank carry the bank's own message, not just a status code. A bare
+"HTTP 400" is what made the first live failure take a web search to diagnose. The
+one exception is the token endpoint, whose error bodies can quote the credentials
+that were sent, so those failures stay bare on purpose.
 
 Dependencies are pinned in `requirements.txt` and `requirements-dev.txt`, both
 generated with `uv pip compile` from `pyproject.toml`. Regenerate them in the same
